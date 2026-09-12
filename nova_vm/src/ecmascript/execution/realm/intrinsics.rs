@@ -1115,39 +1115,46 @@ impl Intrinsics {
     }
 
     /// %Temporal%
+    #[cfg(feature = "temporal")]
     pub(crate) const fn temporal(&self) -> OrdinaryObject<'static> {
         IntrinsicObjectIndexes::Temporal.get_backing_object(self.object_index_base)
     }
 
     /// %Temporal.Duration.Prototype%
+    #[cfg(feature = "temporal")]
     pub(crate) const fn temporal_duration_prototype(&self) -> OrdinaryObject<'static> {
         IntrinsicObjectIndexes::TemporalDurationPrototype.get_backing_object(self.object_index_base)
     }
 
     /// %Temporal.Duration%
+    #[cfg(feature = "temporal")]
     pub(crate) const fn temporal_duration(&self) -> BuiltinFunction<'static> {
         IntrinsicConstructorIndexes::TemporalDuration
             .get_builtin_function(self.builtin_function_index_base)
     }
 
     /// %Temporal.Instant.Prototype%
+    #[cfg(feature = "temporal")]
     pub(crate) const fn temporal_instant_prototype(&self) -> OrdinaryObject<'static> {
         IntrinsicObjectIndexes::TemporalInstantPrototype.get_backing_object(self.object_index_base)
     }
 
     /// %Temporal.Instant%
+    #[cfg(feature = "temporal")]
     pub(crate) const fn temporal_instant(&self) -> BuiltinFunction<'static> {
         IntrinsicConstructorIndexes::TemporalInstant
             .get_builtin_function(self.builtin_function_index_base)
     }
 
     /// %Temporal.PlainTime%
+    #[cfg(feature = "temporal")]
     pub(crate) const fn temporal_plain_time(&self) -> BuiltinFunction<'static> {
         IntrinsicConstructorIndexes::TemporalPlainTime
             .get_builtin_function(self.builtin_function_index_base)
     }
 
     /// %Temporal.PlainTime.Prototype%
+    #[cfg(feature = "temporal")]
     pub(crate) const fn temporal_plain_time_prototype(&self) -> OrdinaryObject<'static> {
         IntrinsicObjectIndexes::TemporalPlainTimePrototype
             .get_backing_object(self.object_index_base)
