@@ -156,8 +156,26 @@ impl<'a> RegExpHeapData<'a> {
                 },
                 '[' if in_class => out.push_str("\\["),
                 '[' => {
-                    in_class = true;
-                    out.push('[');
+                    // JavaScript's two empty classes: `[]` matches nothing and
+                    // `[^]` matches anything, where the crate reads both as a
+                    // class nobody closed.
+                    let negated = chars.peek() == Some(&'^');
+
+                    if negated {
+                        chars.next();
+                    }
+
+                    if chars.peek() == Some(&']') {
+                        chars.next();
+                        out.push_str(if negated { "[\\s\\S]" } else { "[^\\s\\S]" });
+                    } else {
+                        in_class = true;
+                        out.push('[');
+
+                        if negated {
+                            out.push('^');
+                        }
+                    }
                 }
                 ']' if in_class => {
                     in_class = false;
@@ -278,6 +296,16 @@ mod translate_tests {
             RegExpHeapData::translate(r"a+b*c?"),
             std::borrow::Cow::Borrowed(_)
         ));
+    }
+
+    #[test]
+    fn the_empty_classes_compile_to_what_they_mean() {
+        // `[^]` is how a JavaScript pattern says "including newlines".
+        let any = RegExpHeapData::compile_pattern(r"[^]", RegExpFlags::empty()).unwrap();
+        assert!(any.is_match(b"\n"));
+
+        let none = RegExpHeapData::compile_pattern(r"[]", RegExpFlags::empty()).unwrap();
+        assert!(!none.is_match(b"a"));
     }
 
     #[test]

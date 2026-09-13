@@ -1734,6 +1734,18 @@ impl<'a, 's, 'gc, 'scope> CompileEvaluation<'a, 's, 'gc, 'scope> for ast::CallEx
                 v.forget(ctx);
             }
             ctx.add_instruction_with_immediate(Instruction::EvaluateSuper, num_arguments?);
+
+            // The standard initializes a derived class's fields here, now that
+            // `this` exists. The sequence leaves `this` as the result, which is
+            // the object `super()` just bound, so nothing else shifts.
+            if let Some(fields) = ctx.derived_class_fields.take() {
+                class_definition_evaluation::compile_instance_fields(
+                    ctx,
+                    fields.has_private_elements,
+                    fields.fields,
+                );
+            }
+
             return Ok(ValueOutput::Value);
         }
         // 1. Let ref be ? Evaluation of CallExpression.

@@ -20,6 +20,7 @@ use ahash::{AHashMap, AHashSet};
 use oxc_ast::ast::{self, MethodDefinitionKind};
 use oxc_ecmascript::{BoundNames, PrivateBoundIdentifiers, PropName};
 
+use super::compile_context::DerivedClassFields;
 use super::{IndexType, is_anonymous_function_definition};
 
 impl<'a, 's, 'gc, 'scope> CompileEvaluation<'a, 's, 'gc, 'scope> for ast::Class<'s> {
@@ -595,45 +596,23 @@ impl<'a, 's, 'gc, 'scope> CompileEvaluation<'a, 's, 'gc, 'scope> for ast::Class<
             let source_code = ctx.get_source_code();
             let (agent, gc) = ctx.get_agent_and_gc();
             let mut constructor_ctx = CompileContext::new(agent, source_code, gc);
-            // Resolve 'this' into the stack.
-            constructor_ctx.add_instruction(Instruction::ResolveThisBinding);
-            constructor_ctx.add_instruction(Instruction::Load);
-            if has_instance_private_fields_or_methods {
-                constructor_ctx.add_instruction(Instruction::ClassInitializePrivateElements);
+
+            // A derived constructor has no `this` until `super()` returns one,
+            // so the standard initializes its fields there. Everything else has
+            // one on entry.
+            if has_constructor_parent && constructor.is_some() {
+                constructor_ctx.derived_class_fields = Some(DerivedClassFields {
+                    has_private_elements: has_instance_private_fields_or_methods,
+                    fields: instance_fields,
+                });
+            } else {
+                compile_instance_fields(
+                    &mut constructor_ctx,
+                    has_instance_private_fields_or_methods,
+                    instance_fields,
+                );
             }
-            for ele in instance_fields {
-                match ele {
-                    PropertyInitializerField::Field((property_key, value)) => {
-                        if compile_class_static_id_field(property_key, value, &mut constructor_ctx)
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    PropertyInitializerField::Computed((key_id, value)) => {
-                        if compile_class_computed_field(key_id, value, &mut constructor_ctx)
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    PropertyInitializerField::Private((description, private_identifier, value)) => {
-                        if compile_class_private_field(
-                            description,
-                            private_identifier,
-                            value,
-                            &mut constructor_ctx,
-                        )
-                        .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    PropertyInitializerField::StaticBlock(_) => unreachable!(),
-                }
-            }
-            // Pop the `this` value off the stack.
-            constructor_ctx.add_instruction(Instruction::Store);
+
             let source_code = constructor_ctx.get_source_code();
             if let Some(constructor) = constructor {
                 let constructor_data = CompileFunctionBodyData {
@@ -770,11 +749,49 @@ fn class_has_self_references(class: &ast::Class, ctx: &CompileContext) -> bool {
 }
 
 #[derive(Debug)]
-enum PropertyInitializerField<'a, 'gc> {
+pub(crate) enum PropertyInitializerField<'a, 'gc> {
     Field((&'a str, Option<&'a ast::Expression<'a>>)),
     Private((&'a str, u32, Option<&'a ast::Expression<'a>>)),
     Computed((String<'gc>, Option<&'a ast::Expression<'a>>)),
     StaticBlock(&'a ast::StaticBlock<'a>),
+}
+
+/// Writes the sequence that gives an instance its fields: `this` on the stack,
+/// the private elements, every field in source order, and `this` back off it.
+pub(super) fn compile_instance_fields<'s, 'gc>(
+    ctx: &mut CompileContext<'_, 's, 'gc, '_>,
+    has_private_elements: bool,
+    fields: Vec<PropertyInitializerField<'s, 'gc>>,
+) {
+    // Resolve 'this' into the stack.
+    ctx.add_instruction(Instruction::ResolveThisBinding);
+    ctx.add_instruction(Instruction::Load);
+
+    if has_private_elements {
+        ctx.add_instruction(Instruction::ClassInitializePrivateElements);
+    }
+
+    for ele in fields {
+        let compiled = match ele {
+            PropertyInitializerField::Field((property_key, value)) => {
+                compile_class_static_id_field(property_key, value, ctx)
+            }
+            PropertyInitializerField::Computed((key_id, value)) => {
+                compile_class_computed_field(key_id, value, ctx)
+            }
+            PropertyInitializerField::Private((description, private_identifier, value)) => {
+                compile_class_private_field(description, private_identifier, value, ctx)
+            }
+            PropertyInitializerField::StaticBlock(_) => unreachable!(),
+        };
+
+        if compiled.is_err() {
+            break;
+        }
+    }
+
+    // Pop the `this` value off the stack.
+    ctx.add_instruction(Instruction::Store);
 }
 
 /// Compiles a computed field name and stores the result in a local variable

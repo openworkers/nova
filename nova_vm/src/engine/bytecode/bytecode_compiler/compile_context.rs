@@ -27,6 +27,7 @@ use crate::{
     },
 };
 
+use super::class_definition_evaluation::PropertyInitializerField;
 use super::{
     executable_context::ExecutableContext,
     finaliser_stack::{
@@ -97,6 +98,15 @@ pub(crate) struct CompileContext<'agent, 'script, 'gc, 'scope> {
     ///
     /// This affects generator yield and return behaviour.
     generator_kind: Option<GeneratorKind>,
+    /// Instance fields of a derived class constructor, which are initialized at
+    /// `super()` and not on entry: `this` does not exist before it.
+    pub(super) derived_class_fields: Option<DerivedClassFields<'script, 'gc>>,
+}
+
+/// What a derived constructor initializes once `super()` has bound `this`.
+pub(crate) struct DerivedClassFields<'script, 'gc> {
+    pub(super) has_private_elements: bool,
+    pub(super) fields: Vec<PropertyInitializerField<'script, 'gc>>,
 }
 
 impl<'agent, 'script, 'gc, 'scope> CompileContext<'agent, 'script, 'gc, 'scope> {
@@ -115,6 +125,7 @@ impl<'agent, 'script, 'gc, 'scope> CompileContext<'agent, 'script, 'gc, 'scope> 
             control_flow_stack: Vec::new(),
             stack_variables: Vec::new(),
             generator_kind: None,
+            derived_class_fields: None,
         }
     }
 
