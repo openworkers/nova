@@ -3,6 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use oxc_ast::ast::RegExpFlags;
+use std::borrow::Cow;
+
 use regex::bytes::{Regex, RegexBuilder};
 use wtf8::Wtf8Buf;
 
@@ -125,11 +127,54 @@ pub(crate) struct RegExpHeapData<'a> {
 }
 
 impl<'a> RegExpHeapData<'a> {
+    /// JavaScript's pattern grammar is not the regex crate's. Rewrites the two
+    /// pieces that mean something else there and leaves the rest alone: a
+    /// literal `[` inside a character class, which the crate reads as a nested
+    /// class, and `\0`, which it reads as a backreference and has none of.
+    fn translate(pattern: &str) -> Cow<'_, str> {
+        if !pattern.contains('[') && !pattern.contains("\\0") {
+            return Cow::Borrowed(pattern);
+        }
+
+        let mut out = std::string::String::with_capacity(pattern.len());
+        let mut chars = pattern.chars().peekable();
+        let mut in_class = false;
+
+        while let Some(ch) = chars.next() {
+            match ch {
+                '\\' => match chars.next() {
+                    // A digit after it is an octal escape, which is its own
+                    // thing; a bare one is the NUL character.
+                    Some('0') if !chars.peek().is_some_and(char::is_ascii_digit) => {
+                        out.push_str("\\x00")
+                    }
+                    Some(next) => {
+                        out.push('\\');
+                        out.push(next);
+                    }
+                    None => out.push('\\'),
+                },
+                '[' if in_class => out.push_str("\\["),
+                '[' => {
+                    in_class = true;
+                    out.push('[');
+                }
+                ']' if in_class => {
+                    in_class = false;
+                    out.push(']');
+                }
+                _ => out.push(ch),
+            }
+        }
+
+        Cow::Owned(out)
+    }
+
     pub(crate) fn compile_pattern(
         pattern: &str,
         flags: RegExpFlags,
     ) -> Result<Regex, regex::Error> {
-        RegexBuilder::new(pattern)
+        RegexBuilder::new(&Self::translate(pattern))
             .dot_matches_new_line((flags & RegExpFlags::M).bits() > 0)
             .case_insensitive((flags & RegExpFlags::I).bits() > 0)
             .unicode(true)
@@ -202,5 +247,41 @@ impl HeapMarkAndSweep for RegExpHeapData<'static> {
         } = self;
         object_index.sweep_values(compactions);
         original_source.sweep_values(compactions);
+    }
+}
+
+#[cfg(test)]
+mod translate_tests {
+    use super::RegExpFlags;
+    use super::RegExpHeapData;
+
+    fn compiles(pattern: &str) -> bool {
+        RegExpHeapData::compile_pattern(pattern, RegExpFlags::empty()).is_ok()
+    }
+
+    #[test]
+    fn a_literal_bracket_inside_a_class_compiles() {
+        // What every escapeRegExp in the wild is written with.
+        assert!(compiles(r"[.*+?^${}()|[\]\\]"));
+        assert!(compiles(r"[[]"));
+    }
+
+    #[test]
+    fn a_nul_escape_is_the_character_not_a_backreference() {
+        assert!(compiles(r"[\0\n\r]"));
+        assert!(compiles(r"\0"));
+    }
+
+    #[test]
+    fn a_pattern_with_neither_is_left_alone() {
+        assert!(matches!(
+            RegExpHeapData::translate(r"a+b*c?"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn a_class_that_was_closed_takes_a_bracket_again() {
+        assert!(compiles(r"[a][b]"));
     }
 }
