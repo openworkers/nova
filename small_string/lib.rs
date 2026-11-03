@@ -209,16 +209,24 @@ impl SmallString {
             return Some(utf16_idx);
         }
         let mut current_utf16_index = 0;
+        let mut utf8_index = 0;
         let mut scratch = [0u16; 2];
-        for (idx, ch) in self.as_wtf8().code_points().enumerate() {
+        for ch in self.as_wtf8().code_points() {
             match current_utf16_index.cmp(&utf16_idx) {
-                Ordering::Equal => return Some(idx),
+                Ordering::Equal => return Some(utf8_index),
                 Ordering::Greater => return None,
                 Ordering::Less => {
                     current_utf16_index += ch
                         .to_char()
                         .map(|ch| ch.encode_utf16(&mut scratch).len())
-                        .unwrap_or(1)
+                        .unwrap_or(1);
+                    // A lone surrogate takes three bytes in WTF-8.
+                    utf8_index += match ch.to_u32() {
+                        0..0x80 => 1,
+                        0x80..0x800 => 2,
+                        0x800..0x10000 => 3,
+                        _ => 4,
+                    };
                 }
             }
         }
@@ -614,4 +622,47 @@ fn str_conversion() {
     let too_large_unicode = "🤗🤗🤗";
     assert!(SmallString::try_from(too_large_unicode).is_err());
     assert!(SmallString::try_from(Wtf8::from_str(too_large_unicode)).is_err());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SmallString;
+
+    #[test]
+    fn utf8_index_counts_bytes_not_code_points() {
+        // U+FEFF is one UTF-16 unit and three UTF-8 bytes.
+        let bom = SmallString::try_from("\u{feff}a").unwrap();
+
+        assert_eq!(bom.utf8_index(0), Some(0));
+        assert_eq!(bom.utf8_index(1), Some(3));
+        assert_eq!(bom.utf8_index(2), Some(4));
+
+        // Two bytes, then one.
+        let accent = SmallString::try_from("\u{e9}a").unwrap();
+
+        assert_eq!(accent.utf8_index(1), Some(2));
+        assert_eq!(accent.utf8_index(2), Some(3));
+    }
+
+    #[test]
+    fn utf8_index_steps_over_a_surrogate_pair() {
+        // U+1F600 is two UTF-16 units and four UTF-8 bytes.
+        let smile = SmallString::try_from("a\u{1f600}b").unwrap();
+
+        assert_eq!(smile.utf8_index(1), Some(1));
+        assert_eq!(smile.utf8_index(2), None);
+        assert_eq!(smile.utf8_index(3), Some(5));
+        assert_eq!(smile.utf8_index(4), Some(6));
+    }
+
+    #[test]
+    fn utf8_index_and_utf16_index_agree() {
+        let mixed = SmallString::try_from("\u{e9}\u{20ac}z").unwrap();
+
+        for utf16 in 0..=mixed.utf16_len() {
+            let utf8 = mixed.utf8_index(utf16).unwrap();
+
+            assert_eq!(mixed.utf16_index(utf8), utf16);
+        }
+    }
 }
